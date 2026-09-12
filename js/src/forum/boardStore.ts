@@ -1,0 +1,262 @@
+import app from 'flarum/forum/app';
+
+declare const m: any;
+
+/**
+ * The scoreboard's data, held OUTSIDE the component.
+ *
+ * 🚨 This exists because a widget is not mounted once. Bespoke rebuilds its
+ * zone hosts on every redraw — it has to, because Mithril's own redraw wipes
+ * the elements it appended — so a widget placed in a zone is re-created from
+ * scratch each time anything on the page changes. A component that fetched in
+ * `oninit` and called `m.redraw()` when the answer came back therefore fetched,
+ * redrew, was rebuilt, fetched again, and did not stop: eighty requests in a
+ * few seconds, and a widget that never finished rendering because it was never
+ * alive long enough to.
+ *
+ * So the data, the timer and the in-flight request live here, where a remount
+ * cannot touch them, and the component is a reader. It is also why the poll is
+ * one timer for the page rather than one per placement: a scoreboard in the
+ * sidebar and another above the list are two views of the same fact.
+ */
+
+export interface Side {
+  name: string;
+  abbr: string;
+  /**
+   * Where they were ranked GOING INTO THIS GAME, or null for unranked.
+   *
+   * 🚨 Null, never 0. The server sends null on purpose — see Scoreboard::side —
+   * because 0 is both falsy and a number here, so half the ways of asking
+   * "is there a rank" answer no and the other half print "#0".
+   */
+  rank: number | null;
+  /** The dark-ground crest. */
+  logo: string;
+  /** The light-ground crest. See Scoreboard::side for why both travel. */
+  logoLight: string;
+  score: number | null;
+  hasBall: boolean;
+}
+
+export interface Link {
+  id: number;
+  slug: string;
+  title: string;
+  commentCount: number;
+}
+
+export interface WidgetBoard {
+  id: number;
+  state: 'scheduled' | 'live' | 'final';
+  periodLine: string;
+  clock: string | null;
+  possession: 'home' | 'away' | null;
+  down: string | null;
+  // The feed's own text for the yard line — "BC 49", "50". The widget has drawn
+  // this since it was added; the interface had simply never been told.
+  ballOn: string | null;
+  redZone: boolean;
+  clockStale: boolean;
+  kickoff: string | null;
+  home: Side;
+  away: Side;
+  discussion: Link | null;
+}
+
+/** Nothing asked yet | asking | answered. */
+type Status = 'idle' | 'loading' | 'ready';
+
+let boards: WidgetBoard[] = [];
+let status: Status = 'idle';
+let timer: any = null;
+let readers = 0;
+let inFlight: Promise<void> | null = null;
+
+export function currentBoards(): WidgetBoard[] {
+  return boards;
+}
+
+export function isLoading(): boolean {
+  return status === 'loading' && boards.length === 0;
+}
+
+/**
+ * Seed from a host that already resolved the data server-side (Page Builder).
+ *
+ * 🚨 Only ever seeds, never clears. Two placements can disagree about whether
+ * they were handed data — a Page Builder block was, a Bespoke widget on the
+ * same page was not — and letting the second one overwrite the first with an
+ * empty list is how a full scoreboard blanks a moment after it draws.
+ */
+export function seed(given: WidgetBoard[]): void {
+  if (status === 'ready') return;
+
+  boards = given;
+  status = 'ready';
+  schedule(true);
+}
+
+/** A component is on screen. */
+export function attach(): void {
+  readers++;
+
+  if (status === 'idle') {
+    status = 'loading';
+    fetchBoards();
+
+    return;
+  }
+
+  schedule();
+}
+
+/**
+ * 🚨 A pending poll is left alone.
+ *
+ * `attach()` runs on every remount, and Bespoke remounts on every redraw — so
+ * a `schedule()` that always cleared and restarted the timer would push the
+ * next poll fifteen seconds into the future every time anything on the page
+ * changed. On a busy page it would never fire at all, and the board would sit
+ * on its first answer looking live.
+ */
+function schedule(force = false): void {
+  if (timer && ! force) return;
+
+  reschedule();
+}
+
+/**
+ * A component has gone.
+ *
+ * 🚨 Counted, not assumed. A remount is a detach followed immediately by an
+ * attach, so stopping the timer on the first detach would stop it on every
+ * redraw — and stopping it only when the LAST reader leaves is what lets the
+ * poll survive the rebuild that caused all this.
+ */
+export function detach(): void {
+  readers = Math.max(0, readers - 1);
+
+  if (readers === 0 && timer) {
+    clearTimeout(timer);
+    timer = null;
+  }
+}
+
+/**
+ * How often to ask again.
+ *
+ * 🚨 Every fifteen seconds while a game is being PLAYED, and almost never
+ * otherwise. This can sit on a page every visitor loads, so a poll that ran
+ * regardless would be a request per reader per interval, all year, to be told
+ * the same thing.
+ *
+ * 🚨 Paced by the FIRST game, which is the most urgent by construction — one
+ * being played sorts ahead of one that has not started. Pacing by the whole
+ * strip would put a Saturday of scheduled fixtures on the live cadence because
+ * one of the ten had kicked off.
+ *
+ * A scheduled game still needs a poll or the widget shows "Kickoff 7:30pm"
+ * through the whole first quarter to anybody who left the tab open — but only
+ * inside the half hour before kickoff, which is the only window in which the
+ * answer can change.
+ */
+function reschedule(): void {
+  if (timer) clearTimeout(timer);
+  timer = null;
+
+  if (readers === 0) return;
+
+  const lead = boards[0];
+  if (!lead) return;
+
+  if (lead.state === 'live') {
+    /*
+     * Six seconds while a game is on.
+     *
+     * The arithmetic that matters is the WORST CASE a viewer can see, which is
+     * the server's refresh window plus one poll. At 15s against a 12s window
+     * that was ~27s; at 6s against an 8s window it is ~14s.
+     *
+     * 🚨 Polling faster than this buys very little, because the feed itself is
+     * not continuous. Sampling ESPN every 5s during a live drive: 7:17, 7:17,
+     * 7:17, 7:10, 7:10 ... 6:22 — it publishes per PLAY, in chunks of tens of
+     * seconds, not per second. Once the poll is comfortably inside their
+     * publish interval the remaining lag is theirs, and more requests only
+     * fetch the same numbers again.
+     *
+     * Most of these polls cost nothing outbound: the server answers from its
+     * shared window and only one request in each window reaches ESPN.
+     */
+    timer = setTimeout(fetchBoards, 6000);
+
+    return;
+  }
+
+  if (lead.state === 'scheduled' && nearKickoff(lead)) {
+    timer = setTimeout(fetchBoards, 60000);
+  }
+}
+
+function nearKickoff(board: WidgetBoard): boolean {
+  if (!board.kickoff) return false;
+
+  // Already past kickoff counts: the feed can be a minute or two behind the
+  // whistle, and that is exactly when somebody is watching this.
+  return new Date(board.kickoff).getTime() - Date.now() < 1800000;
+}
+
+/**
+ * Tell whichever host is drawing this that there is something new.
+ *
+ * 🚨 `m.redraw()` alone is not enough in Bespoke, and the reason is not
+ * obvious: its widgets are mounted with `m.render()` into their own roots, so a
+ * global redraw never reaches them. A widget that fetched and redrew like any
+ * Mithril component stayed blank until something else happened to force a full
+ * re-render — which, before the poll loop was fixed, the loop itself was doing
+ * several times a second. Fixing the loop is what made this visible.
+ *
+ * Both are called, and neither is required: Page Builder renders inside the
+ * normal tree and wants the redraw; Bespoke wants the zones re-rendered; a host
+ * with neither gets a harmless no-op.
+ */
+function announce(): void {
+  try {
+    m.redraw();
+  } catch (e) { /* not mounted */ }
+
+  try {
+    (app as any).bespoke?.renderZones?.();
+  } catch (e) { /* Bespoke absent, or too old to expose it */ }
+}
+
+function fetchBoards(): Promise<void> {
+  // 🚨 One request, however many placements asked. Two widgets on a page are
+  // two views of one scoreboard, not two scoreboards.
+  if (inFlight) return inFlight;
+
+  inFlight = app
+    .request<{ boards: WidgetBoard[] }>({
+      method: 'GET',
+      url: `${app.forum.attribute('apiUrl')}/gameday/board`,
+    })
+    .then((res: any) => {
+      boards = (res && res.boards) || [];
+      status = 'ready';
+    })
+    .catch(() => {
+      // A missed poll is a stale board, not a broken page. The first failure is
+      // different — it leaves nothing to draw, and the widget's empty state is
+      // what says so.
+      status = 'ready';
+    })
+    .then(() => {
+      inFlight = null;
+      // Forced: the state may have changed (a game went final), and the answer
+      // that just arrived is the one the next interval should be based on.
+      schedule(true);
+      announce();
+    });
+
+  return inFlight;
+}
