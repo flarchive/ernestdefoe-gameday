@@ -1,0 +1,255 @@
+<?php
+
+declare(strict_types=1);
+
+namespace ErnestDefoe\Gameday\Service;
+
+use ErnestDefoe\Gameday\GamedayThread;
+
+/**
+ * A game, turned into what a scoreboard actually shows.
+ *
+ * 🚨 Decided HERE, not in the component. Whether a clock is still true, whether
+ * a down is a fact about the game or a leftover, and what the period line should
+ * say are all judgements — and a view is for choosing what to show rather than
+ * for working out what a thing means. It is also what lets the first render and
+ * the refresh poll answer identically: both call this.
+ */
+class Scoreboard
+{
+    /**
+     * How long a game clock is still worth printing.
+     *
+     * 🚨 The sync floor is a minute, on purpose — ESPN's scoreboard is public
+     * and unauthenticated, which is a reason to be gentle with it rather than a
+     * reason to hammer it. So a clock here is at best a minute old, and "2:41 to
+     * play" that is three minutes stale is simply a wrong number printed in a
+     * confident font.
+     *
+     * The PERIOD does not have this problem: a quarter lasts fifteen minutes, so
+     * it is still true long after the clock beside it stopped being. Past this
+     * window the clock is dropped and the period carries the line alone.
+     */
+    public const CLOCK_FRESH_FOR = 180;
+
+    /**
+     * @param  object $event  a PickEvent, with its teams loaded
+     * @return array<string, mixed>
+     */
+    public function shape(object $event, ?GamedayThread $thread = null, ?int $now = null): array
+    {
+        $now ??= time();
+
+        $status = (string) ($event->status ?? '');
+        $threadState = $thread->state ?? '';
+        $hasScore = $event->home_score !== null && $event->away_score !== null;
+
+        $state = match (true) {
+            $status === 'finished' && $hasScore => 'final',
+            $threadState === GamedayThread::LIVE || $status === 'in_progress' => 'live',
+            default => 'scheduled',
+        };
+
+        $period = (int) ($event->period ?? 0);
+        $clockAt = (int) ($event->clock_at ?? 0);
+        $fresh = $clockAt > 0 && ($now - $clockAt) <= self::CLOCK_FRESH_FOR;
+        $clock = trim((string) ($event->clock ?? ''));
+
+        $possession = $state === 'live' && $fresh
+            && in_array((string) ($event->possession ?? ''), ['home', 'away'], true)
+                ? (string) $event->possession
+                : null;
+
+        /*
+         * Marked on the SIDE, because that is where the ball is drawn and the
+         * strip renders the two sides through one loop — a view asking "is this
+         * the home one?" halfway down a loop is a view doing arithmetic.
+         */
+        $home = $this->side($event, 'home');
+        $away = $this->side($event, 'away');
+        $home['hasBall'] = $possession === 'home';
+        $away['hasBall'] = $possession === 'away';
+
+        return [
+            'id' => (int) $event->id,
+            'state' => $state,
+
+            /*
+             * ESPN's own wording where there is any — "2nd Quarter", "Halftime",
+             * "End of 3rd". Better than anything built from a number here,
+             * because it already knows what a period means in a game that has
+             * gone to overtime.
+             */
+            'periodLine' => $this->periodLine($event, $period, $state),
+
+            /*
+             * 🚨 Not at a period boundary. Between quarters and at half the feed
+             * sends a stopped "0:00", and printing it beside "Halftime" says the
+             * same thing twice in a way that looks like a fault.
+             */
+            'clock' => $state === 'live' && $fresh && $clock !== '' && $clock !== '0:00' ? $clock : null,
+
+            /*
+             * 🚨 Possession only while it is fresh, and only during play.
+             *
+             * A ball marker beside a team is a strong claim — it says "they have
+             * it, now". Three minutes after the fact that is simply wrong, and
+             * wrong in the most visible place on the board, so it goes when the
+             * clock goes rather than lingering as decoration.
+             */
+            'possession' => $possession,
+
+            /*
+             * 🚨 Only while somebody actually has the ball. The feed keeps
+             * sending the last down through halftime, so an earlier version of
+             * this printed "1st & Goal" beside "Halftime" — a down nobody was
+             * playing. A down without a possession is not a fact about the game.
+             */
+            'down' => $possession !== null && $fresh
+                ? (trim((string) ($event->down_distance ?? '')) ?: null)
+                : null,
+
+            /*
+             * Where the ball is, on the same terms as the down above and for
+             * the same reason: a yard line is a claim about right now. The feed
+             * keeps sending the last one through a stoppage, and "BC 49" beside
+             * "Halftime" is a sentence about a play nobody is running.
+             */
+            'ballOn' => $possession !== null && $fresh
+                ? (trim((string) ($event->ball_on ?? '')) ?: null)
+                : null,
+
+            'redZone' => $state === 'live' && $fresh && ! empty($event->red_zone),
+
+            /*
+             * Said out loud rather than left to be inferred from a missing
+             * clock. "Waiting for the feed" is a different thing from "the
+             * clock is stopped", and a board that silently drops its clock
+             * looks broken in exactly the moment somebody is watching it.
+             */
+            'clockStale' => $state === 'live' && $clockAt > 0 && ! $fresh,
+
+            'kickoff' => $event->match_date?->toIso8601String(),
+            // The date is real, the time is a placeholder; see Picks' time_tbd.
+            'kickoffTbd' => (bool) $event->time_tbd,
+
+            /*
+             * Where it is being played and who is showing it.
+             *
+             * 🚨 These are what a SCHEDULED board has instead of a score. A
+             * fixture that has not kicked off is two crests, two dashes and a
+             * time — a panel with nothing in it, in the hours when the most
+             * people are looking at it — and these are the two facts everybody
+             * wants in exactly that window. They cost nothing: Picks takes them
+             * from the same payload it already fetches for the score.
+             */
+            'venue' => trim((string) ($event->venue ?? '')),
+            'venueCity' => trim((string) ($event->venue_city ?? '')),
+            'broadcast' => trim((string) ($event->broadcast ?? '')),
+
+            'home' => $home,
+            'away' => $away,
+        ];
+    }
+
+    protected function periodLine(object $event, int $period, string $state): string
+    {
+        if ($state === 'final') {
+            // Overtime is worth saying; a regulation finish is just "Final".
+            return $period > 4 ? 'Final / OT' : 'Final';
+        }
+
+        if ($state !== 'live') {
+            return '';
+        }
+
+        $detail = trim((string) ($event->clock_detail ?? ''));
+
+        /*
+         * 🚨 ESPN's short detail already carries the clock — "5:44 - 2nd". The
+         * clock has its own place on the strip, so printing this whole would say
+         * 5:44 twice, and the second one would go stale while the first was
+         * being dropped for exactly that reason.
+         *
+         * Everything after the dash is the part worth keeping. Where there is no
+         * dash the whole thing is the period and says something a number cannot:
+         * "Halftime", "End of 3rd".
+         */
+        if ($detail !== '') {
+            $dash = strpos($detail, ' - ');
+
+            return $dash === false ? $detail : trim(substr($detail, $dash + 3));
+        }
+
+        return $period > 0 ? self::ordinal($period) : '';
+    }
+
+    protected static function ordinal(int $period): string
+    {
+        return match (true) {
+            $period === 1 => '1st',
+            $period === 2 => '2nd',
+            $period === 3 => '3rd',
+            $period === 4 => '4th',
+            // 5 is the first overtime, 6 the second, and so on.
+            default => 'OT'.($period > 5 ? (string) ($period - 4) : ''),
+        };
+    }
+
+    /** @return array<string, mixed> */
+    protected function side(object $event, string $which): array
+    {
+        $team = $event->{$which.'Team'} ?? null;
+        $score = $event->{$which.'_score'};
+
+        /*
+         * 🚨 Read off the GAME, never off the team, and that is not an
+         * implementation detail — it is what keeps an old board honest. A rank
+         * belongs to the week it was published in, so a rank kept on the club
+         * would rewrite every game thread on the site each time the poll moved:
+         * September's final score would sit under November's number, and the
+         * caption would be about a game nobody played. Picks freezes it onto
+         * the fixture; see that migration.
+         *
+         * 🚨 Null rather than 0 when unranked, because the view's question is
+         * "is there a rank" and `0` answers it falsely in JavaScript twice over
+         * — it is falsy, and it is also a number, so a template that prints
+         * whatever it is given prints "#0".
+         */
+        $rank = (int) ($event->{$which.'_rank'} ?? 0);
+
+        return [
+            'name' => (string) ($team->name ?? ''),
+            'abbr' => (string) ($team->abbreviation ?? ''),
+            'rank' => $rank > 0 ? $rank : null,
+
+            /*
+             * 🚨 Their record GOING IN, which is the only reading of it that is
+             * safe on a board that outlives the game. Picks writes it from the
+             * fixture feed and stops writing once the game finishes, so a final
+             * score keeps the records the two sides carried into it — which is
+             * what a boxed final on a broadcast shows, and what makes an old
+             * thread still readable.
+             */
+            'record' => trim((string) ($event->{$which.'_record'} ?? '')),
+            /*
+             * 🚨 BOTH crests, because the two things that draw them no longer
+             * agree about their ground.
+             *
+             * The board at the head of a game thread is dark in either theme —
+             * it is built from chrome colours, which is what a real scoreboard
+             * looks like — and takes `logo`, the dark-ground mark. The widget
+             * follows the page theme, so it ships both and lets CSS choose;
+             * laying a white-on-transparent crest on a light panel is how a
+             * team's mark becomes an empty box.
+             *
+             * `logo` stays the dark-ground one so the hero's contract does not
+             * move. Picks' own accessors fall back to the standard logo, so a
+             * team with only one variant is unaffected either way.
+             */
+            'logo' => (string) ($team->logo_dark_url ?? $team->logo_url ?? ''),
+            'logoLight' => (string) ($team->logo_url ?? $team->logo_dark_url ?? ''),
+            'score' => $score === null ? null : (int) $score,
+        ];
+    }
+}
