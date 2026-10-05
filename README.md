@@ -2,24 +2,13 @@
 
 > **Read-only archive of released versions of ernestdefoe/gameday.** Not for installation: use [Packagist](https://packagist.org/packages/ernestdefoe/gameday) or the [upstream repository](https://github.com/ernestdefoe/gameday).
 
-**18** versions archived · Latest: [`1.8.1`](https://github.com/flarchive/ernestdefoe-gameday/tree/archive/v1.8.1) · License: `MIT` · Flarum: `^2.0`
+**0** versions archived · Latest: [`1.8.2`](https://github.com/flarchive/ernestdefoe-gameday/tree/archive/v1.8.2) · License: `MIT` · Flarum: `^2.0`
 
 ## Archived Versions
 
 | Version | Released | Flarum | Source |
 |---|---|---|---|
-| `1.0.0` | 2026-09-09 | `^2.0` | [Browse](https://github.com/flarchive/ernestdefoe-gameday/tree/archive/v1.0.0) |
-| `1.0.1` | 2026-09-12 | `^2.0` | [Browse](https://github.com/flarchive/ernestdefoe-gameday/tree/archive/v1.0.1) |
-| `1.0.2` | 2026-09-12 | `^2.0` | [Browse](https://github.com/flarchive/ernestdefoe-gameday/tree/archive/v1.0.2) |
-| `1.1.0` | 2026-09-12 | `^2.0` | [Browse](https://github.com/flarchive/ernestdefoe-gameday/tree/archive/v1.1.0) |
-| `1.1.1` | 2026-09-12 | `^2.0` | [Browse](https://github.com/flarchive/ernestdefoe-gameday/tree/archive/v1.1.1) |
-| `1.1.2` | 2026-09-12 | `^2.0` | [Browse](https://github.com/flarchive/ernestdefoe-gameday/tree/archive/v1.1.2) |
-| `1.2.0` | 2026-09-12 | `^2.0` | [Browse](https://github.com/flarchive/ernestdefoe-gameday/tree/archive/v1.2.0) |
-| `1.2.1` | 2026-09-12 | `^2.0` | [Browse](https://github.com/flarchive/ernestdefoe-gameday/tree/archive/v1.2.1) |
-| `1.2.2` | 2026-09-12 | `^2.0` | [Browse](https://github.com/flarchive/ernestdefoe-gameday/tree/archive/v1.2.2) |
-| `1.2.3` | 2026-09-12 | `^2.0` | [Browse](https://github.com/flarchive/ernestdefoe-gameday/tree/archive/v1.2.3) |
-
-[View all 18 versions](https://github.com/flarchive/ernestdefoe-gameday/tags)
+| — | — | — | — |
 
 Catalog entry: [packages/ernestdefoe-gameday.json](https://github.com/flarchive/archive-index/blob/main/packages/ernestdefoe-gameday.json)
 
