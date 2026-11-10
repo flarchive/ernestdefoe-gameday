@@ -1,0 +1,78 @@
+{
+    "name": "ernestdefoe/gameday",
+    "description": "A thread for every game, opened before kickoff and finished with a recap that says how the game was won.",
+    "type": "flarum-extension",
+    "keywords": [
+        "flarum",
+        "extension",
+        "college football",
+        "cfb",
+        "sports",
+        "game thread"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Ernest Defoe",
+            "email": "ernestdefoe@gmail.com"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/ernestdefoe/gameday/issues",
+        "source": "https://github.com/ernestdefoe/gameday"
+    },
+    "require": {
+        "php": "^8.3",
+        "flarum/core": "^2.0",
+        "ernestdefoe/picks": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "ErnestDefoe\\Gameday\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "ErnestDefoe\\Gameday\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "flarum-extension": {
+            "title": "Game Day",
+            "category": "feature",
+            "icon": {
+                "name": "fas fa-football",
+                "backgroundColor": "#8a3a1f",
+                "color": "#fff"
+            },
+            "optional-dependencies": [
+                "flarum/tags",
+                "flarum/sticky"
+            ]
+        }
+    },
+    "require-dev": {
+        "flarum/phpstan": "^2.0",
+        "flarum/testing": "^2.0",
+        "fof/seo": "^4.0"
+    },
+    "scripts": {
+        "test": [
+            "@test:unit",
+            "@test:integration"
+        ],
+        "test:unit": "@php tests/run.php",
+        "test:integration": "phpunit -c tests/phpunit.integration.xml",
+        "test:setup": "@php tests/integration/setup.php",
+        "analyse:phpstan": "phpstan analyse"
+    },
+    "scripts-descriptions": {
+        "test": "Runs all tests.",
+        "test:unit": "Runs the recap, preview and share-card checks (plain PHP, no database).",
+        "test:integration": "Runs all integration tests.",
+        "test:setup": "Sets up a database for use with integration tests. Execute this only once.",
+        "analyse:phpstan": "Run static analysis"
+    },
+    "minimum-stability": "beta",
+    "prefer-stable": true
+}
